@@ -1,0 +1,564 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Plus, Minus, Trash2, Ticket, Banknote, QrCode,
+  Check, X, Pencil, History, Settings, Store, Loader2,
+} from 'lucide-react';
+
+const COLORS = {
+  cream: '#FFF6E9',
+  creamDeep: '#F2E1BE',
+  brown: '#2E1B0F',
+  brownSoft: '#7A5738',
+  gold: '#E39A34',
+  goldDeep: '#B9711A',
+  cheese: '#F2C14E',
+  pandan: '#3F7350',
+  chili: '#C1442E',
+  paper: '#FFFFFF',
+};
+
+const DEFAULT_MENU = [
+  { id: 'default-1', name: 'Set Pisang Goreng Cheese', price: 8 },
+];
+
+const PAYMENT_METHODS = [
+  { id: 'kupon', label: 'Kupon', icon: Ticket, color: COLORS.cheese },
+  { id: 'tunai', label: 'Tunai', icon: Banknote, color: COLORS.gold },
+  { id: 'qr', label: 'QR', icon: QrCode, color: COLORS.pandan },
+];
+
+function formatRM(n) {
+  return `RM${Number(n).toFixed(2)}`;
+}
+
+function dateKey(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export default function PGCCashier() {
+  const [loading, setLoading] = useState(true);
+  const [menu, setMenu] = useState(DEFAULT_MENU);
+  const [transactions, setTransactions] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [note, setNote] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState(null);
+  const [tab, setTab] = useState('kasir');
+  const [toast, setToast] = useState(null);
+  const [logFilter, setLogFilter] = useState('today');
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemPrice, setNewItemPrice] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editPrice, setEditPrice] = useState('');
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      let menuData = DEFAULT_MENU;
+      let txData = [];
+
+      const [menuRes, txRes] = await Promise.allSettled([
+        window.storage.get('menu', false),
+        window.storage.get('transactions', false),
+      ]);
+
+      if (menuRes.status === 'fulfilled' && menuRes.value && menuRes.value.value) {
+        try { menuData = JSON.parse(menuRes.value.value); } catch (e) { /* keep default */ }
+      }
+      if (txRes.status === 'fulfilled' && txRes.value && txRes.value.value) {
+        try { txData = JSON.parse(txRes.value.value); } catch (e) { /* keep empty */ }
+      }
+
+      setMenu(menuData);
+      setTransactions(txData);
+      setLoading(false);
+    })();
+  }, []);
+
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2200);
+  }, []);
+
+  const saveMenu = async (newMenu) => {
+    setMenu(newMenu);
+    try {
+      await window.storage.set('menu', JSON.stringify(newMenu), false);
+    } catch (e) {
+      showToast('Gagal simpan menu');
+    }
+  };
+
+  const saveTransactions = async (newTx) => {
+    setTransactions(newTx);
+    try {
+      await window.storage.set('transactions', JSON.stringify(newTx), false);
+    } catch (e) {
+      showToast('Gagal simpan transaksi');
+    }
+  };
+
+  const addToCart = (item) => {
+    setCart(prev => {
+      const existing = prev.find(c => c.id === item.id);
+      if (existing) {
+        return prev.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c);
+      }
+      return [...prev, { id: item.id, name: item.name, price: item.price, qty: 1 }];
+    });
+  };
+
+  const updateQty = (id, delta) => {
+    setCart(prev => prev
+      .map(c => c.id === id ? { ...c, qty: c.qty + delta } : c)
+      .filter(c => c.qty > 0)
+    );
+  };
+
+  const cartTotal = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+
+  const resetSaleForm = () => {
+    setCart([]);
+    setNote('');
+    setPaymentMethod(null);
+  };
+
+  const completeSale = async () => {
+    if (cart.length === 0 || !paymentMethod) return;
+    setSaving(true);
+    const tx = {
+      id: `tx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: Date.now(),
+      items: cart.map(c => ({ name: c.name, price: c.price, qty: c.qty })),
+      total: cartTotal,
+      paymentMethod,
+      note: note.trim(),
+    };
+    await saveTransactions([tx, ...transactions]);
+    setSaving(false);
+    resetSaleForm();
+    showToast('Jualan disimpan');
+  };
+
+  const addMenuItem = async () => {
+    const price = parseFloat(newItemPrice);
+    if (!newItemName.trim() || isNaN(price) || price <= 0) return;
+    const item = { id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: newItemName.trim(), price };
+    await saveMenu([...menu, item]);
+    setNewItemName('');
+    setNewItemPrice('');
+  };
+
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditName(item.name);
+    setEditPrice(String(item.price));
+  };
+
+  const saveEdit = async () => {
+    const price = parseFloat(editPrice);
+    if (!editName.trim() || isNaN(price) || price <= 0) return;
+    await saveMenu(menu.map(m => m.id === editingId ? { ...m, name: editName.trim(), price } : m));
+    setEditingId(null);
+  };
+
+  const deleteMenuItem = async (id) => {
+    await saveMenu(menu.filter(m => m.id !== id));
+  };
+
+  const doResetAll = async () => {
+    await saveTransactions([]);
+    setConfirmReset(false);
+    showToast('Log transaksi dipadam');
+  };
+
+  const filteredTx = logFilter === 'today'
+    ? transactions.filter(t => dateKey(t.timestamp) === dateKey(Date.now()))
+    : transactions;
+
+  const summary = PAYMENT_METHODS.reduce((acc, pm) => {
+    acc[pm.id] = filteredTx.filter(t => t.paymentMethod === pm.id).reduce((s, t) => s + t.total, 0);
+    return acc;
+  }, {});
+  const grandTotal = Object.values(summary).reduce((a, b) => a + b, 0);
+
+  if (loading) {
+    return (
+      <div style={{ background: COLORS.cream }} className="min-h-screen flex items-center justify-center">
+        <Loader2 className="animate-spin" style={{ color: COLORS.brown }} size={28} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: COLORS.cream, fontFamily: "'Plus Jakarta Sans', sans-serif", color: COLORS.brown }} className="min-h-screen">
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');`}</style>
+
+      <div className="max-w-md mx-auto pb-24">
+        <div style={{ background: COLORS.brown }} className="px-5 pt-6 pb-5 rounded-b-3xl">
+          <div className="flex items-center gap-2">
+            <Store size={20} color={COLORS.cheese} />
+            <span style={{ fontFamily: "'Fraunces', serif", color: COLORS.cheese }} className="text-xl font-bold tracking-tight">
+              Kaunter PGC
+            </span>
+          </div>
+          <p style={{ color: COLORS.creamDeep }} className="text-xs mt-1">
+            Pisang Goreng Cheese — sistem kira jualan
+          </p>
+        </div>
+
+        <div className="flex gap-2 px-4 -mt-3">
+          {[
+            { id: 'kasir', label: 'Kasir', icon: Store },
+            { id: 'log', label: 'Log', icon: History },
+            { id: 'menu', label: 'Menu', icon: Settings },
+          ].map(t => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                style={{
+                  background: active ? COLORS.gold : COLORS.paper,
+                  color: active ? COLORS.brown : COLORS.brownSoft,
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-2xl shadow-sm text-sm font-semibold"
+              >
+                <Icon size={15} />
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-4 mt-4">
+          {tab === 'kasir' && (
+            <KasirTab
+              menu={menu}
+              cart={cart}
+              addToCart={addToCart}
+              updateQty={updateQty}
+              note={note}
+              setNote={setNote}
+              paymentMethod={paymentMethod}
+              setPaymentMethod={setPaymentMethod}
+              cartTotal={cartTotal}
+              completeSale={completeSale}
+              saving={saving}
+            />
+          )}
+          {tab === 'log' && (
+            <LogTab
+              filteredTx={filteredTx}
+              logFilter={logFilter}
+              setLogFilter={setLogFilter}
+              summary={summary}
+              grandTotal={grandTotal}
+              confirmReset={confirmReset}
+              setConfirmReset={setConfirmReset}
+              doResetAll={doResetAll}
+            />
+          )}
+          {tab === 'menu' && (
+            <MenuTab
+              menu={menu}
+              newItemName={newItemName}
+              setNewItemName={setNewItemName}
+              newItemPrice={newItemPrice}
+              setNewItemPrice={setNewItemPrice}
+              addMenuItem={addMenuItem}
+              editingId={editingId}
+              editName={editName}
+              setEditName={setEditName}
+              editPrice={editPrice}
+              setEditPrice={setEditPrice}
+              startEdit={startEdit}
+              saveEdit={saveEdit}
+              setEditingId={setEditingId}
+              deleteMenuItem={deleteMenuItem}
+            />
+          )}
+        </div>
+      </div>
+
+      {toast && (
+        <div style={{ background: COLORS.brown, color: COLORS.cheese }} className="fixed bottom-5 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-sm font-medium shadow-lg flex items-center gap-1.5">
+          <Check size={14} /> {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KasirTab({ menu, cart, addToCart, updateQty, note, setNote, paymentMethod, setPaymentMethod, cartTotal, completeSale, saving }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold mb-2" style={{ color: COLORS.brownSoft }}>Pilih item</h2>
+        <div className="grid grid-cols-2 gap-2.5">
+          {menu.map(item => (
+            <button
+              key={item.id}
+              onClick={() => addToCart(item)}
+              style={{ background: COLORS.paper, borderColor: COLORS.gold }}
+              className="text-left p-3 rounded-2xl border-2 active:scale-95 transition-transform"
+            >
+              <div className="font-semibold text-sm leading-snug">{item.name}</div>
+              <div style={{ color: COLORS.goldDeep }} className="text-sm font-bold mt-1">{formatRM(item.price)}</div>
+            </button>
+          ))}
+          {menu.length === 0 && (
+            <p className="col-span-2 text-sm" style={{ color: COLORS.brownSoft }}>
+              Tiada item lagi. Tambah di tab Menu.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {cart.length > 0 && (
+        <div style={{ background: COLORS.paper }} className="rounded-2xl p-3.5 shadow-sm">
+          <h2 className="text-sm font-semibold mb-2" style={{ color: COLORS.brownSoft }}>Troli</h2>
+          <div className="space-y-2">
+            {cart.map(c => (
+              <div key={c.id} className="flex items-center justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{c.name}</div>
+                  <div className="text-xs" style={{ color: COLORS.brownSoft }}>{formatRM(c.price)} × {c.qty}</div>
+                </div>
+                <div className="flex items-center gap-2 ml-2">
+                  <button aria-label="Kurangkan kuantiti" onClick={() => updateQty(c.id, -1)} style={{ background: COLORS.cream }} className="w-7 h-7 rounded-full flex items-center justify-center">
+                    <Minus size={13} />
+                  </button>
+                  <span className="w-5 text-center text-sm font-semibold">{c.qty}</span>
+                  <button aria-label="Tambahkan kuantiti" onClick={() => updateQty(c.id, 1)} style={{ background: COLORS.cream }} className="w-7 h-7 rounded-full flex items-center justify-center">
+                    <Plus size={13} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <input
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            placeholder="Nota (cth: no. kupon) — pilihan"
+            style={{ borderColor: COLORS.creamDeep }}
+            className="w-full mt-3 px-3 py-2 rounded-xl border text-sm"
+          />
+
+          <div className="mt-3">
+            <div className="text-xs mb-1.5" style={{ color: COLORS.brownSoft }}>Cara bayar</div>
+            <div className="flex gap-2">
+              {PAYMENT_METHODS.map(pm => {
+                const Icon = pm.icon;
+                const active = paymentMethod === pm.id;
+                return (
+                  <button
+                    key={pm.id}
+                    onClick={() => setPaymentMethod(pm.id)}
+                    style={{
+                      background: active ? pm.color : COLORS.cream,
+                      color: active ? (pm.id === 'qr' ? '#fff' : COLORS.brown) : COLORS.brownSoft,
+                    }}
+                    className="flex-1 flex flex-col items-center gap-1 py-2.5 rounded-xl text-xs font-semibold"
+                  >
+                    <Icon size={16} />
+                    {pm.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between mt-3.5 pt-3" style={{ borderTop: `1px dashed ${COLORS.creamDeep}` }}>
+            <span className="text-sm font-medium" style={{ color: COLORS.brownSoft }}>Jumlah</span>
+            <span className="text-lg font-bold">{formatRM(cartTotal)}</span>
+          </div>
+
+          <button
+            onClick={completeSale}
+            disabled={!paymentMethod || saving}
+            style={{
+              background: paymentMethod ? COLORS.pandan : COLORS.creamDeep,
+              color: paymentMethod ? '#fff' : COLORS.brownSoft,
+            }}
+            className="w-full mt-3 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+          >
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+            Selesai Jualan
+          </button>
+          {!paymentMethod && (
+            <p className="text-xs text-center mt-1.5" style={{ color: COLORS.chili }}>Pilih cara bayar dahulu</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogTab({ filteredTx, logFilter, setLogFilter, summary, grandTotal, confirmReset, setConfirmReset, doResetAll }) {
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        {['today', 'all'].map(f => (
+          <button
+            key={f}
+            onClick={() => setLogFilter(f)}
+            style={{
+              background: logFilter === f ? COLORS.brown : COLORS.paper,
+              color: logFilter === f ? COLORS.cheese : COLORS.brownSoft,
+            }}
+            className="px-3.5 py-1.5 rounded-full text-xs font-semibold"
+          >
+            {f === 'today' ? 'Hari ini' : 'Semua'}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ background: COLORS.paper }} className="rounded-2xl p-4 shadow-sm">
+        <div className="flex items-baseline justify-between mb-3">
+          <span className="text-sm font-semibold" style={{ color: COLORS.brownSoft }}>Jumlah keseluruhan</span>
+          <span className="text-xl font-bold">{formatRM(grandTotal)}</span>
+        </div>
+        <div className="space-y-2.5">
+          {PAYMENT_METHODS.map(pm => {
+            const amount = summary[pm.id] || 0;
+            const pct = grandTotal > 0 ? (amount / grandTotal) * 100 : 0;
+            const Icon = pm.icon;
+            return (
+              <div key={pm.id}>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <Icon size={12} /> {pm.label}
+                  </span>
+                  <span className="font-semibold">{formatRM(amount)}</span>
+                </div>
+                <div style={{ background: COLORS.cream }} className="h-1.5 rounded-full overflow-hidden">
+                  <div style={{ width: `${pct}%`, background: pm.color }} className="h-full rounded-full" />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {filteredTx.length === 0 && (
+          <p className="text-sm text-center py-6" style={{ color: COLORS.brownSoft }}>
+            Tiada transaksi lagi.
+          </p>
+        )}
+        {filteredTx.map(t => {
+          const pm = PAYMENT_METHODS.find(p => p.id === t.paymentMethod);
+          const Icon = pm ? pm.icon : Banknote;
+          const time = new Date(t.timestamp).toLocaleString('ms-MY', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+          return (
+            <div key={t.id} style={{ background: COLORS.paper }} className="rounded-xl p-3 flex items-center gap-3 shadow-sm">
+              <div style={{ background: pm ? pm.color : COLORS.cream }} className="w-9 h-9 rounded-full flex items-center justify-center shrink-0">
+                <Icon size={15} color={t.paymentMethod === 'qr' ? '#fff' : COLORS.brown} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">
+                  {t.items.map(i => `${i.name} ×${i.qty}`).join(', ')}
+                </div>
+                <div className="text-xs" style={{ color: COLORS.brownSoft }}>{time}{t.note ? ` · ${t.note}` : ''}</div>
+              </div>
+              <div className="text-sm font-bold shrink-0">{formatRM(t.total)}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {filteredTx.length > 0 && (
+        <div className="pt-2">
+          {!confirmReset ? (
+            <button onClick={() => setConfirmReset(true)} className="text-xs font-medium" style={{ color: COLORS.chili }}>
+              Padam log transaksi
+            </button>
+          ) : (
+            <div style={{ background: COLORS.paper }} className="rounded-xl p-3 flex items-center justify-between">
+              <span className="text-xs font-medium">Padam SEMUA transaksi?</span>
+              <div className="flex gap-2">
+                <button onClick={() => setConfirmReset(false)} className="text-xs font-semibold px-2.5 py-1 rounded-lg" style={{ background: COLORS.cream }}>Batal</button>
+                <button onClick={doResetAll} className="text-xs font-semibold px-2.5 py-1 rounded-lg text-white" style={{ background: COLORS.chili }}>Padam</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuTab({ menu, newItemName, setNewItemName, newItemPrice, setNewItemPrice, addMenuItem, editingId, editName, setEditName, editPrice, setEditPrice, startEdit, saveEdit, setEditingId, deleteMenuItem }) {
+  return (
+    <div className="space-y-4">
+      <div style={{ background: COLORS.paper }} className="rounded-2xl p-3.5 shadow-sm">
+        {menu.map(item => (
+          <div key={item.id} style={{ borderColor: COLORS.cream }} className="flex items-center gap-2 py-2 border-b last:border-b-0">
+            {editingId === item.id ? (
+              <>
+                <input value={editName} onChange={e => setEditName(e.target.value)} className="flex-1 min-w-0 px-2 py-1.5 rounded-lg border text-sm" style={{ borderColor: COLORS.creamDeep }} />
+                <input value={editPrice} onChange={e => setEditPrice(e.target.value)} type="number" inputMode="decimal" className="w-20 px-2 py-1.5 rounded-lg border text-sm" style={{ borderColor: COLORS.creamDeep }} />
+                <button aria-label="Simpan" onClick={saveEdit} style={{ background: COLORS.pandan }} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
+                  <Check size={14} color="#fff" />
+                </button>
+                <button aria-label="Batal" onClick={() => setEditingId(null)} style={{ background: COLORS.cream }} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
+                  <X size={14} />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{item.name}</div>
+                  <div className="text-xs" style={{ color: COLORS.brownSoft }}>{formatRM(item.price)}</div>
+                </div>
+                <button aria-label="Edit item" onClick={() => startEdit(item)} style={{ background: COLORS.cream }} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
+                  <Pencil size={13} />
+                </button>
+                <button aria-label="Padam item" onClick={() => deleteMenuItem(item.id)} style={{ background: COLORS.cream }} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
+                  <Trash2 size={13} color={COLORS.chili} />
+                </button>
+              </>
+            )}
+          </div>
+        ))}
+        {menu.length === 0 && (
+          <p className="text-sm py-2" style={{ color: COLORS.brownSoft }}>Tiada item. Tambah di bawah.</p>
+        )}
+      </div>
+
+      <div style={{ background: COLORS.paper }} className="rounded-2xl p-3.5 shadow-sm">
+        <h2 className="text-sm font-semibold mb-2" style={{ color: COLORS.brownSoft }}>Tambah item baru</h2>
+        <div className="flex gap-2">
+          <input
+            value={newItemName}
+            onChange={e => setNewItemName(e.target.value)}
+            placeholder="Nama item"
+            className="flex-1 min-w-0 px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: COLORS.creamDeep }}
+          />
+          <input
+            value={newItemPrice}
+            onChange={e => setNewItemPrice(e.target.value)}
+            placeholder="RM"
+            type="number"
+            inputMode="decimal"
+            className="w-20 px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: COLORS.creamDeep }}
+          />
+        </div>
+        <button
+          onClick={addMenuItem}
+          style={{ background: COLORS.gold }}
+          className="w-full mt-2.5 py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5"
+        >
+          <Plus size={15} /> Tambah
+        </button>
+      </div>
+    </div>
+  );
+}
